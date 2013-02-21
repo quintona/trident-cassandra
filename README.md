@@ -48,6 +48,54 @@ public static class Options<T> implements Serializable {
 }
 ```
 
+## Bucket Usage
+
+You can also use the bucket functionality of this trident extension. 
+Essentially the base version persists against a set row key, so for each state you can only have a single row in a CF.
+
+The extension in this fork allows you to specify a RowKeyStrategy, which can dynamically derive the row key for you. 
+
+I have used this to implement rolling time windows through the concept of time buckets.
+
+```java
+		CassandraBucketState.BucketOptions options = new CassandraBucketState.BucketOptions();
+		options.keyspace = "XXX";
+		options.columnFamily = "XXX";
+		options.rowKey = "XXX";
+		options.keyStrategy = new TimeBasedRowStrategy(new ConcreteTimeProvider());
+		return CassandraBucketState.nonTransactional("localhost", options);
+```
+
+This strategy simply appends a timestamp to the static row key:
+
+```java
+	public class TimeBasedRowStrategy implements RowKeyStrategy, Serializable {
+		private TimeProvider timeProvider;
+		public TimeBasedRowStrategy(TimeProvider timeProvider){
+			this.timeProvider = timeProvider;
+		}
+		@Override
+		public <T> String getRowKey(List<List<Object>> keys, Options<T> options) {
+			return options.rowKey + StateUtils.formatHour(timeProvider.getTime());
+		}
+
+	}
+```
+
+The concrete time provider is really trivial:
+
+```java
+	public class ConcreteTimeProvider implements TimeProvider, Serializable {
+	@Override
+	public Date getTime() {
+		return new Date(Time.currentTimeMillis());
+	}
+
+}
+```
+
+You could of course implement any kind of row key strategy... 
+
 ## License
 
 Copyright (C) 2012 Sergey Lukjanov

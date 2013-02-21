@@ -1,5 +1,6 @@
 package trident.cassandra;
 
+import backtype.storm.task.IMetricsContext;
 import backtype.storm.tuple.Values;
 import com.google.common.base.Function;
 import com.google.common.collect.Collections2;
@@ -75,10 +76,10 @@ public class CassandraState<T> implements IBackingMap<T> {
     }
 
     protected static class Factory implements StateFactory {
-        private StateType stateType;
-        private Serializer serializer;
-        private String hosts;
-        private Options options;
+        protected StateType stateType;
+        protected Serializer serializer;
+        protected String hosts;
+        protected Options options;
 
         public Factory(StateType stateType, String hosts, Options options) {
             this.stateType = stateType;
@@ -94,11 +95,16 @@ public class CassandraState<T> implements IBackingMap<T> {
                 throw new RuntimeException("Serializer should be specified for type: " + stateType);
             }
         }
+        
+        public State makeState(Map conf, IMetricsContext metrics,
+				int partitionIndex, int numPartitions) {
+        	CassandraState state = new CassandraState(hosts, options, serializer);
+        	return makeState(conf,metrics,partitionIndex,numPartitions,state);
+        }
 
-        @SuppressWarnings("unchecked")
-        @Override
-        public State makeState(Map conf, int partitionIndex, int numPartitions) {
-            CassandraState state = new CassandraState(hosts, options, serializer);
+		@SuppressWarnings("rawtypes")
+		protected State makeState(Map conf, IMetricsContext metrics,
+				int partitionIndex, int numPartitions, CassandraState state) {
 
             CachedMap cachedMap = new CachedMap(state, options.localCacheSize);
 
@@ -114,12 +120,12 @@ public class CassandraState<T> implements IBackingMap<T> {
             }
 
             return new SnapshottableMap(mapState, new Values(options.globalKey));
-        }
+		}
     }
 
-    private HectorTemplate hectorTemplate;
-    private Options<T> options;
-    private Serializer<T> serializer;
+    protected HectorTemplate hectorTemplate;
+    protected Options<T> options;
+    protected Serializer<T> serializer;
 
     public CassandraState(String hosts, Options<T> options, Serializer<T> serializer) {
         hectorTemplate = new HectorTemplateImpl(
@@ -131,9 +137,12 @@ public class CassandraState<T> implements IBackingMap<T> {
         this.options = options;
         this.serializer = serializer;
     }
-
-    @Override
+    
     public List<T> multiGet(List<List<Object>> keys) {
+    	return multiGet(keys, options.rowKey);
+    }
+
+    protected List<T> multiGet(List<List<Object>> keys, String rowKey) {
         Collection<Composite> columnNames = toColumnNames(keys);
 
         SliceQuery<String, Composite, byte[]> query = hectorTemplate.createSliceQuery(
@@ -141,7 +150,7 @@ public class CassandraState<T> implements IBackingMap<T> {
                 CompositeSerializer.get(),
                 BytesArraySerializer.get())
                 .setColumnFamily(options.columnFamily)
-                .setKey(options.rowKey)
+                .setKey(rowKey)
                 .setColumnNames(columnNames.toArray(new Composite[columnNames.size()]));
 
         List<HColumn<Composite, byte[]>> result = query.execute().get().getColumns();
@@ -168,22 +177,26 @@ public class CassandraState<T> implements IBackingMap<T> {
 
         return values;
     }
-
+    
     @Override
     public void multiPut(List<List<Object>> keys, List<T> values) {
+    	multiPut(keys, values, options.rowKey);
+    }
+
+    protected void multiPut(List<List<Object>> keys, List<T> values, String rowKey) {
         Mutator<String> mutator = hectorTemplate.createMutator(StringSerializer.get());
 
         for (int i = 0; i < keys.size(); i++) {
             Composite columnName = toColumnName(keys.get(i));
             byte[] bytes = serializer.serialize(values.get(i));
             HColumn<Composite, byte[]> column = HFactory.createColumn(columnName, bytes);
-            mutator.insert(options.rowKey, options.columnFamily, column);
+            mutator.insert(rowKey, options.columnFamily, column);
         }
 
         mutator.execute();
     }
 
-    private Collection<Composite> toColumnNames(List<List<Object>> keys) {
+    protected Collection<Composite> toColumnNames(List<List<Object>> keys) {
         return Collections2.transform(keys, new Function<List<Object>, Composite>() {
             @Override
             public Composite apply(List<Object> key) {
@@ -192,7 +205,7 @@ public class CassandraState<T> implements IBackingMap<T> {
         });
     }
 
-    private Composite toColumnName(List<Object> key) {
+    protected Composite toColumnName(List<Object> key) {
         Composite columnName = new Composite();
         for (Object component : key) {
             columnName.addComponent((String) component, StringSerializer.get());
